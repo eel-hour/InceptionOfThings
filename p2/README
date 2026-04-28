@@ -1,0 +1,93 @@
+# Part 2 – K3s with three applications and Ingress
+
+This part deploys three web applications on a single K3s node and exposes them using an Ingress controller (Traefik). The routing is based on the Host header:
+
+Hostname      | Destination application | Replicas
+app1.com      | app1 (nginx)            | 1
+app2.com      | app2 (nginx)            | 3
+any other     | app3 (nginx)            | 1
+
+The entire environment runs inside a single Vagrant VM (yourloginS). Alpine Linux is used, with K3s version 1.27.12 – the last version fully compatible with cgroup v1.
+
+## Requirements
+
+- Same as Part 1 (VirtualBox, Vagrant)
+- Internet connection (to download the base box, K3s, and container images)
+
+## Directory structure
+
+p2/
+├── Vagrantfile
+├── confs/
+│   └── config.env
+└── scripts/
+    ├── setup-k3s.sh      # installs K3s server (v1.27.12) on Alpine
+    └── deploy-apps.sh    # creates deployments, services, and Ingress
+
+## Configuration
+
+Edit confs/config.env:
+
+LOGIN="your42login"
+OS_BOX="generic/alpine318"
+CPU_COUNT=1
+RAM_MB=1024
+SERVER_IP="192.168.56.110"
+NETWORK_INTERFACE="eth1"
+
+Note: This part uses K3s v1.27.12 to avoid cgroup v2 requirements on Alpine. Do not attempt to upgrade to v1.28+ without enabling cgroup v2 first.
+
+## Deploying the environment
+
+cd p2
+vagrant up
+
+The provisioning will:
+1. Launch the Alpine VM with hostname yourloginS
+2. Install K3s server (v1.27.12) with Traefik enabled (default)
+3. Deploy the three nginx deployments and corresponding Services
+4. Create an Ingress resource that routes traffic based on Host
+5. Wait for all pods and Traefik to become ready
+
+## Verification
+
+1. Check Kubernetes resources:
+
+vagrant ssh yourloginS -c "kubectl get nodes"
+vagrant ssh yourloginS -c "kubectl get pods"
+vagrant ssh yourloginS -c "kubectl get ingress"
+
+2. Test Ingress routing:
+
+vagrant ssh yourloginS -c "curl -H 'Host: app1.com' http://192.168.56.110"
+vagrant ssh yourloginS -c "curl -H 'Host: app2.com' http://192.168.56.110"
+vagrant ssh yourloginS -c "curl -H 'Host: anything.com' http://192.168.56.110"
+
+All should return the default nginx welcome page.
+
+3. Verify replica count for app2:
+
+vagrant ssh yourloginS -c "kubectl get pods | grep app2 | wc -l"
+# Should output 3
+
+## Troubleshooting
+
+- API not ready: The provisioning script waits up to 120 attempts (2 seconds each) for the API to respond. First-run image pulls may take longer – increase the loop count if needed.
+- Ingress not working: Ensure Traefik is running (kubectl get pods -n kube-system). The default K3s installation includes Traefik; do not add --disable=traefik.
+- Cgroup errors: If you see "kubelet is configured to not run on a host using cgroup v1", you have installed a K3s version >=1.28. Downgrade to v1.27.12 as shown in setup-k3s.sh.
+
+## Clean up
+
+vagrant destroy -f
+
+## Note on cgroup v2
+
+Alpine Linux uses cgroup v1 by default. K3s versions 1.28 and above require cgroup v2. This project deliberately uses K3s 1.27.12 to remain compatible with Alpine out-of-the-box. If you wish to use a newer K3s, you must first enable cgroup v2 on Alpine (kernel parameters, rc_cgroup_mode="unified", and a reboot).
+
+## What is demonstrated
+
+- Single-node K3s cluster on Alpine
+- Deployment of multiple applications with different replica counts
+- Kubernetes Services (ClusterIP)
+- Ingress routing (Traefik) based on virtual hosts
+- Full automation with Vagrant and shell provisioning

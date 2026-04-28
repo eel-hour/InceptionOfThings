@@ -1,0 +1,77 @@
+# Part 1 – K3s with Vagrant (two machines)
+
+This part sets up a lightweight Kubernetes cluster using K3s on two Alpine Linux virtual machines managed by Vagrant. One VM acts as the server (control plane), the other as an agent (worker).
+
+## Requirements
+
+- VirtualBox (6.1 or later)
+- Vagrant (2.2+)
+- Internet connection (to download boxes and K3s)
+
+## Directory structure
+
+p1/
+├── Vagrantfile          # main Vagrant configuration
+├── confs/
+│   └── config.env       # environment variables (login, IPs, resources)
+└── scripts/
+    ├── setup-server.sh  # provisions K3s server (control plane)
+    └── setup-worker.sh  # provisions K3s agent (worker)
+
+## Configuration
+
+Edit confs/config.env to match your environment:
+
+LOGIN="your42login"          # used for VM hostnames (yourloginS, yourloginSW)
+OS_BOX="generic/alpine318"   # Alpine Linux 3.18 (64-bit)
+CPU_COUNT=1
+RAM_MB=1024                   # 1GB recommended (512 minimum)
+SERVER_IP="192.168.56.110"
+WORKER_IP="192.168.56.111"
+NETWORK_INTERFACE="eth1"      # host-only network interface inside the VMs
+
+Note: The generic/alpine318 box uses eth1 for the second network adapter. If you change the box, adjust NETWORK_INTERFACE accordingly.
+
+## Running the cluster
+
+cd p1
+vagrant up
+
+This will:
+- Create and boot two VMs (yourloginS and yourloginSW)
+- Install K3s server on yourloginS (with --cluster-init for HA-compatible storage)
+- Install K3s agent on yourloginSW and join it to the control plane
+- Copy the kubeconfig to the default location (/home/vagrant/.kube/config)
+
+## Verification
+
+After successful provisioning, check the cluster status:
+
+vagrant ssh yourloginS -c "kubectl get nodes"
+
+Expected output:
+
+NAME        STATUS   ROLES                AGE   VERSION
+yourloginS  Ready    control-plane,etcd   2m    v1.34.6+k3s1
+yourloginSW Ready    <none>               1m    v1.34.6+k3s1
+
+You can also run:
+
+vagrant ssh yourloginS -c "kubectl get pods -A"
+
+## Troubleshooting
+
+- VT-x/AMD-V errors: Enable nested virtualization in your host's VirtualBox VM settings (or run Vagrant directly on a bare metal host).
+- Worker fails to join: Check that the node-token file is correctly passed. The token is written by the server into confs/node-token and read by the worker; after the worker joins, you may delete this file for security.
+- SSH timeouts: Increase the boot timeout in the Vagrantfile or ensure your host has enough resources.
+
+## Clean up
+
+vagrant destroy -f
+
+## What works
+
+- Two-node K3s cluster (control plane + worker)
+- K3s version: latest stable as of April 2026 (v1.34.6 used during development)
+- Alpine Linux 3.18 guest
+- Shared folders via VirtualBox (scripts and configuration)
