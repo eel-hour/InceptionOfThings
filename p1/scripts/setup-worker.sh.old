@@ -1,0 +1,27 @@
+#!/bin/bash
+set -e
+
+echo "=== Setting up K3s Worker ==="
+
+for i in {1..30}; do
+  if [ -f ${TOKEN_FILE} ]; then
+    echo "Token found!"
+    break
+  fi
+  echo "Attempt $i/30: Waiting for token..."
+  sleep 2
+done
+
+if [ ! -f ${TOKEN_FILE} ]; then
+  echo "ERROR: Node token not found"
+  exit 1
+fi
+
+K3S_TOKEN=$(cat ${TOKEN_FILE})
+
+curl -sfL https://get.k3s.io | sh -s - agent \
+  --server https://${SERVER_IP}:6443 \
+  --token ${K3S_TOKEN} \
+  --flannel-iface ${NETWORK_INTERFACE}
+
+echo "=== Worker setup complete ==="

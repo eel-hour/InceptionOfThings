@@ -1,0 +1,56 @@
+config_file = File.join(File.dirname(__FILE__), 'confs', 'config.env')
+env_vars = {}
+
+if File.exist?(config_file)
+  File.readlines(config_file).each do |line|
+    next if line.strip.empty? || line.start_with?('#')
+    key, value = line.strip.split('=', 2)
+    env_vars[key] = value.gsub('"', '') if key && value
+  end
+end
+
+LOGIN      = env_vars['LOGIN']
+OS_BOX     = env_vars['OS_BOX']
+CPU_COUNT  = env_vars['CPU_COUNT'].to_i
+RAM_MB     = env_vars['RAM_MB'].to_i
+SERVER_IP  = env_vars['SERVER_IP']
+NETWORK_INTERFACE = env_vars['NETWORK_INTERFACE']
+
+Vagrant.configure("2") do |config|
+  config.vm.box = OS_BOX
+
+  config.vm.provider "virtualbox" do |vb|
+    vb.memory = RAM_MB
+    vb.cpus = CPU_COUNT
+  end
+
+  config.vm.synced_folder ".", "/vagrant", disabled: true
+  config.vm.synced_folder "./scripts", "/home/vagrant/scripts", type: "rsync"
+  config.vm.synced_folder "./confs", "/home/vagrant/confs", type: "rsync"
+
+  config.vm.define "#{LOGIN}S" do |server|
+    server.vm.hostname = "#{LOGIN}S"
+    server.vm.network "private_network", ip: SERVER_IP
+
+    # --- CRITICAL: Configure cgroup v2 for Alpine before K3s install ---
+    server.vm.provision "shell", inline: <<-SHELL
+      # Set cgroup mode to unified (v2)
+      echo 'rc_cgroup_mode="unified"' >> /etc/rc.conf
+      # Add cgroup kernel parameters to bootloader config
+      sed -i 's/\(default_kernel_opts="[^"]*\)"/\1 cgroup_enable=cpuset cgroup_memory=1 cgroup_enable=memory swapaccount=1"/' /etc/update-extlinux.conf
+      # Regenerate bootloader config
+      update-extlinux
+    SHELL
+
+    # Install K3s server
+    server.vm.provision "shell", path: "scripts/setup-k3s.sh", env: {
+      "SERVER_IP" => SERVER_IP,
+      "NETWORK_INTERFACE" => NETWORK_INTERFACE
+    }
+
+    # Deploy applications after K3s is ready
+    server.vm.provision "shell", path: "scripts/deploy-apps.sh", env: {
+      "SERVER_IP" => SERVER_IP
+    }
+  end
+end

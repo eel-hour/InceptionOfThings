@@ -1,0 +1,62 @@
+config_file = File.join(File.dirname(__FILE__), 'confs', 'config.env')
+env_vars = {}
+
+File.readlines(config_file).each do |line|
+  next if line.strip.empty? || line.start_with?('#')
+  key, value = line.strip.split('=', 2)
+  env_vars[key] = value.gsub('"', '') if key && value
+end
+
+LOGIN      = env_vars['LOGIN']
+OS_BOX     = env_vars['OS_BOX']
+CPU_COUNT  = env_vars['CPU_COUNT'].to_i
+RAM_MB     = env_vars['RAM_MB'].to_i
+SERVER_IP  = env_vars['SERVER_IP']
+WORKER_IP  = env_vars['WORKER_IP']
+
+Vagrant.configure("2") do |config|
+  config.vm.box = OS_BOX
+  
+  config.vm.provider "virtualbox" do |vb|
+    vb.memory = RAM_MB
+    vb.cpus = CPU_COUNT
+  end
+
+  config.vm.synced_folder ".", "/vagrant", disabled: true
+  config.vm.synced_folder "./scripts", "/home/vagrant/scripts", SharedFolderEnableSymlinksCreate: false
+  config.vm.synced_folder "./confs", "/home/vagrant/confs", SharedFolderEnableSymlinkCreate: false
+
+  config.vm.provision "shell", inline: <<-SHELL
+    echo "http://dl-cdn.alpinelinux.org/alpine/v3.18/main" > /etc/apk/repositories
+    echo "http://dl-cdn.alpinelinux.org/alpine/v3.18/community" >> /etc/apk/repositories
+    apk update
+    apk add curl bash
+    chown -R vagrant:vagrant /home/vagrant
+  SHELL
+
+  config.vm.define "#{LOGIN}S" do |server|
+    server.vm.hostname = "#{LOGIN}S"
+    server.vm.network "private_network", ip: SERVER_IP
+    
+    server.vm.provision "shell", path: "scripts/setup-server.sh", env: {
+      "LOGIN" => LOGIN,
+      "SERVER_IP" => SERVER_IP,
+      "NETWORK_INTERFACE" => "eth1",
+      "CONFS_PATH" => "/home/vagrant/confs",
+      "TOKEN_FILE" => "/home/vagrant/confs/node-token"
+    }
+  end
+
+  config.vm.define "#{LOGIN}SW" do |worker|
+    worker.vm.hostname = "#{LOGIN}SW"
+    worker.vm.network "private_network", ip: WORKER_IP
+    
+    worker.vm.provision "shell", path: "scripts/setup-worker.sh", env: {
+      "LOGIN" => LOGIN,
+      "SERVER_IP" => SERVER_IP,
+      "NETWORK_INTERFACE" => "eth1",
+      "CONFS_PATH" => "/home/vagrant/confs",
+      "TOKEN_FILE" => "/home/vagrant/confs/node-token"
+    }
+  end
+end

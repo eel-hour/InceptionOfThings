@@ -1,0 +1,39 @@
+#!/bin/bash
+set -e
+
+echo "=== Setting up K3s Server ==="
+echo "Server IP: ${SERVER_IP}"
+
+# Install K3s with proper kubeconfig permissions
+curl -sfL https://get.k3s.io | sh -s - server \
+  --flannel-iface ${NETWORK_INTERFACE} \
+  --bind-address ${SERVER_IP} \
+  --advertise-address ${SERVER_IP} \
+  --write-kubeconfig-mode 644
+
+# Wait for K3s to be ready
+echo "Waiting for K3s to be ready..."
+for i in {1..60}; do
+  if [ -f /etc/rancher/k3s/k3s.yaml ]; then
+    echo "K3s config file found!"
+    break
+  fi
+  echo "Attempt $i/60: Waiting for k3s.yaml..."
+  sleep 2
+done
+
+# Setup kubectl for vagrant user
+mkdir -p /home/vagrant/.kube
+cp /etc/rancher/k3s/k3s.yaml /home/vagrant/.kube/config
+chown -R vagrant:vagrant /home/vagrant/.kube
+chmod 600 /home/vagrant/.kube/config
+
+# Save node token for worker
+cp /var/lib/rancher/k3s/server/node-token ${TOKEN_FILE}
+chmod 644 ${TOKEN_FILE}
+
+# Add useful aliases
+echo "alias k='kubectl'" >> /home/vagrant/.bashrc
+echo "alias kgn='kubectl get nodes'" >> /home/vagrant/.bashrc
+
+echo "=== Server setup complete ==="
