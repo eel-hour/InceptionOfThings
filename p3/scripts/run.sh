@@ -23,7 +23,8 @@ APP_PORT="${APP_PORT:-8888}"
 ARGOCD_NAMESPACE="${ARGOCD_NAMESPACE:-argocd}"
 DEV_NAMESPACE="${DEV_NAMESPACE:-dev}"
 ARGOCD_NODEPORT="${ARGOCD_NODEPORT:-30443}"
-LOCAL_PORT="${LOCAL_PORT:-9999}"   # Use a free port to avoid conflicts
+LOCAL_APP_PORT="${LOCAL_APP_PORT:-9999}"
+LOCAL_ARGOCD_PORT="${LOCAL_ARGOCD_PORT:-8080}"
 
 # Docker group handling
 if [ -z "$DOCKER_GROUP_ACTIVATED" ]; then
@@ -100,7 +101,7 @@ kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=argocd-server -
 kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=argocd-repo-server -n "$ARGOCD_NAMESPACE" --timeout=300s
 kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=argocd-dex-server -n "$ARGOCD_NAMESPACE" --timeout=300s
 
-# Expose Argo CD server via NodePort (optional, for UI)
+# Expose Argo CD server via NodePort (optional, for direct access but may not work on host)
 kubectl patch svc argocd-server -n "$ARGOCD_NAMESPACE" -p '{"spec": {"type": "NodePort", "ports": [{"port": 443, "nodePort": '"$ARGOCD_NODEPORT"'}]}}'
 
 ARGOCD_PASS=$(kubectl -n "$ARGOCD_NAMESPACE" get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d)
@@ -125,13 +126,14 @@ if ! command -v argocd &> /dev/null; then
     done
 fi
 
-# Log in to Argo CD (use port-forward because NodePort may not be reachable from host)
-echo "=== Setting up port-forward to Argo CD ==="
-kubectl port-forward -n "$ARGOCD_NAMESPACE" svc/argocd-server "$ARGOCD_NODEPORT":443 > /dev/null 2>&1 &
-PF_PID=$!
-sleep 5
+# Start port-forward for Argo CD UI (keep it in background)
+echo "=== Starting Argo CD UI port‑forward (http://localhost:$LOCAL_ARGOCD_PORT) ==="
+kubectl port-forward -n "$ARGOCD_NAMESPACE" svc/argocd-server "$LOCAL_ARGOCD_PORT":443 > /tmp/argocd-pf.log 2>&1 &
+ARGOCD_PF_PID=$!
 
-argocd login localhost:"$ARGOCD_NODEPORT" --insecure --username admin --password "$ARGOCD_PASS"
+sleep 5
+# Login using the port‑forward
+argocd login localhost:"$LOCAL_ARGOCD_PORT" --insecure --username admin --password "$ARGOCD_PASS"
 
 # Create Argo CD application
 argocd app create myapp \
@@ -150,19 +152,17 @@ argocd app sync myapp
 sleep 10
 kubectl wait --for=condition=ready pod -l app=playground -n "$DEV_NAMESPACE" --timeout=120s
 
-# Stop the Argo CD port-forward (no longer needed)
-kill $PF_PID 2>/dev/null || true
-
-# Expose the application via port-forward (using a free local port)
-echo "=== Exposing application on localhost ==="
-kubectl port-forward -n "$DEV_NAMESPACE" svc/playground-svc "$LOCAL_PORT":8888 > /dev/null 2>&1 &
-echo "Application available at http://localhost:$LOCAL_PORT"
+# Start port-forward for the application (keep it in background)
+echo "=== Starting application port‑forward (http://localhost:$LOCAL_APP_PORT) ==="
+kubectl port-forward -n "$DEV_NAMESPACE" svc/playground-svc "$LOCAL_APP_PORT":8888 > /tmp/app-pf.log 2>&1 &
+APP_PF_PID=$!
 
 VM_IP=$(hostname -I | awk '{print $1}')
 echo "=========================================="
 echo "Setup complete!"
-echo "Argo CD UI: https://$VM_IP:$ARGOCD_NODEPORT (user: admin, password: $ARGOCD_PASS)"
-echo "Application URL (using port‑forward): http://localhost:$LOCAL_PORT"
+echo "Argo CD UI: http://localhost:$LOCAL_ARGOCD_PORT (user: admin, password: $ARGOCD_PASS)"
+echo "Application URL: http://localhost:$LOCAL_APP_PORT"
 echo "=========================================="
-echo "To test the initial version, run: curl http://localhost:$LOCAL_PORT"
-echo "To change version, edit deployment.yaml in your GitHub repo, commit & push, then after sync run again: curl http://localhost:$LOCAL_PORT"
+echo "To test the initial version, run: curl http://localhost:$LOCAL_APP_PORT"
+echo "To change version, edit deployment.yaml in your GitHub repo, commit & push, then after sync (or manual sync) run curl again."
+echo "Port‑forward processes are running in background. To stop them later: kill $ARGOCD_PF_PID $APP_PF_PID"
